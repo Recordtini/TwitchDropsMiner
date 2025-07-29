@@ -98,7 +98,7 @@ class HeadlessGUIManager:
         pass
 
     @property
-def close_requested(self) -> bool:
+    def close_requested(self) -> bool:
         return self._close_requested.is_set()
 
     def prevent_close(self):
