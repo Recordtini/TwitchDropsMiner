@@ -16,7 +16,6 @@ import aiohttp
 from yarl import URL
 
 from translate import _
-from gui import GUIManager
 from channel import Channel
 from websocket import WebsocketPool
 from inventory import DropsCampaign
@@ -56,7 +55,6 @@ from constants import (
 
 if TYPE_CHECKING:
     from utils import Game
-    from gui import LoginForm
     from channel import Stream
     from settings import Settings
     from inventory import TimedDrop
@@ -107,7 +105,6 @@ class _AuthState:
         self._logged_in.clear()
 
     async def _oauth_login(self) -> str:
-        login_form: LoginForm = self._twitch.gui.login
         client_info: ClientInfo = self._twitch._client_type
         headers = {
             "Accept": "application/json",
@@ -147,7 +144,7 @@ class _AuthState:
                     expires_at = now + timedelta(seconds=response_json["expires_in"])
 
                 # Print the code to the user, open them the activate page so they can type it in
-                await login_form.ask_enter_code(verification_uri, user_code)
+                await self._twitch.gui.login.ask_enter_code(verification_uri, user_code)
 
                 payload = {
                     "client_id": self._twitch._client_type.CLIENT_ID,
@@ -183,7 +180,6 @@ class _AuthState:
     async def _login(self) -> str:
         logger.info("Login flow started")
         gui_print = self._twitch.gui.print
-        login_form: LoginForm = self._twitch.gui.login
         client_info: ClientInfo = self._twitch._client_type
 
         token_kind: str = ''
@@ -203,7 +199,7 @@ class _AuthState:
         }
 
         while True:
-            login_data = await login_form.ask_login()
+            login_data = await self._twitch.gui.login.ask_login()
             payload["username"] = login_data.username
             payload["password"] = login_data.password
             # reinstate the 2FA token, if present
@@ -253,8 +249,8 @@ class _AuthState:
                     gui_print(_("login", "incorrect_login_pass"))
                     if error_code == 2004:
                         # invalid username
-                        login_form.clear(login=True)
-                    login_form.clear(password=True)
+                        self._twitch.gui.login.clear(login=True)
+                    self._twitch.gui.login.clear(password=True)
                     continue
                 elif error_code in (
                     3012,  # Invalid authy token
@@ -267,7 +263,7 @@ class _AuthState:
                     else:
                         token_kind = "authy"
                         gui_print(_("login", "incorrect_twofa_code"))
-                    login_form.clear(token=True)
+                    self._twitch.gui.login.clear(token=True)
                     continue
                 elif error_code in (
                     3011,  # Authy token needed
@@ -308,7 +304,7 @@ class _AuthState:
             if "access_token" in login_response:
                 self.access_token = cast(str, login_response["access_token"])
                 logger.info("Access token granted")
-                login_form.clear()
+                self._twitch.gui.login.clear()
                 break
 
         if use_chrome:
@@ -369,9 +365,8 @@ class _AuthState:
             self.device_id = cookie["unique_id"].value
         if not self._hasattrs("access_token", "user_id"):
             # looks like we're missing something
-            login_form: LoginForm = self._twitch.gui.login
             logger.info("Checking login")
-            login_form.update(_("gui", "login", "logging_in"), None)
+            self._twitch.gui.login.update(_("gui", "login", "logging_in"), None)
             for client_mismatch_attempt in range(2):
                 for invalid_token_attempt in range(2):
                     cookie = jar.filter_cookies(client_info.CLIENT_URL)
@@ -410,7 +405,7 @@ class _AuthState:
             self.user_id = int(validate_response["user_id"])
             cookie["persistent"] = str(self.user_id)
             logger.info(f"Login successful, user ID: {self.user_id}")
-            login_form.update(_("gui", "login", "logged_in"), self.user_id)
+            self._twitch.gui.login.update(_("gui", "login", "logged_in"), self.user_id)
             # update our cookie and save it
             jar.update_cookies(cookie, client_info.CLIENT_URL)
             jar.save(COOKIES_PATH)

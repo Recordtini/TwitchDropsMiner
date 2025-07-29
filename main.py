@@ -14,8 +14,6 @@ if __name__ == "__main__":
     import argparse
     import warnings
     import traceback
-    import tkinter as tk
-    from tkinter import messagebox
     from typing import IO, NoReturn
 
     import truststore
@@ -34,21 +32,6 @@ if __name__ == "__main__":
 
     if sys.version_info < (3, 10):
         raise RuntimeError("Python 3.10 or higher is required")
-
-    class Parser(argparse.ArgumentParser):
-        def __init__(self, *args, **kwargs) -> None:
-            super().__init__(*args, **kwargs)
-            self._message: io.StringIO = io.StringIO()
-
-        def _print_message(self, message: str, file: IO[str] | None = None) -> None:
-            self._message.write(message)
-            # print(message, file=self._message)
-
-        def exit(self, status: int = 0, message: str | None = None) -> NoReturn:
-            try:
-                super().exit(status, message)  # sys.exit(2)
-            finally:
-                messagebox.showerror("Argument Parser Error", self._message.getvalue())
 
     class ParsedArgs(argparse.Namespace):
         _verbose: int
@@ -105,35 +88,12 @@ if __name__ == "__main__":
         "--headless", dest="headless", action="store_true", help=argparse.SUPPRESS
     )
     args = parser.parse_args(namespace=ParsedArgs())
-    if not args.headless:
-        # we need a dummy invisible window for the parser
-        root = tk.Tk()
-        root.overrideredirect(True)
-        root.withdraw()
-        set_root_icon(root, resource_path("icons/pickaxe.ico"))
-        root.update()
-        # NOTE: parser output is shown via message box
-        parser = Parser(
-            SELF_PATH.name,
-            description="A program that allows you to mine timed drops on Twitch.",
-        )
     # load settings
     try:
         settings = Settings(args)
     except Exception:
-        if not args.headless:
-            messagebox.showerror(
-                "Settings error",
-                f"There was an error while loading the settings file:\n\n{traceback.format_exc()}"
-            )
-        else:
-            print(f"There was an error while loading the settings file:\n\n{traceback.format_exc()}")
+        print(f"There was an error while loading the settings file:\n\n{traceback.format_exc()}")
         sys.exit(4)
-    if not args.headless:
-        # dummy window isn't needed anymore
-        root.destroy()
-        # get rid of unneeded objects
-        del root
     del parser
 
     # client run
