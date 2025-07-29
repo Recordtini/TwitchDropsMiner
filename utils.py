@@ -11,7 +11,6 @@ import asyncio
 import logging
 import traceback
 import webbrowser
-import tkinter as tk
 from enum import Enum
 from pathlib import Path
 from functools import wraps
@@ -22,8 +21,6 @@ from collections import abc, OrderedDict
 from typing import Any, Literal, Callable, Generic, Mapping, TypeVar, ParamSpec, cast
 
 from yarl import URL
-from PIL.ImageTk import PhotoImage
-from PIL import Image as Image_module
 
 from exceptions import ExitRequest, ReloadRequest
 from constants import IS_PACKAGED, JsonType, PriorityMode
@@ -35,14 +32,6 @@ _D = TypeVar("_D")  # default
 _P = ParamSpec("_P")  # params
 _JSON_T = TypeVar("_JSON_T", bound=Mapping[Any, Any])
 logger = logging.getLogger("TwitchDrops")
-
-
-def set_root_icon(root: tk.Tk, image_path: Path | str) -> None:
-    with Image_module.open(image_path) as image:
-        icon_photo = PhotoImage(master=root, image=image)
-    root.iconphoto(True, icon_photo)  # type: ignore[arg-type]
-    # keep a reference to the PhotoImage to avoid the ResourceWarning
-    root._icon_image = icon_photo  # type: ignore[attr-defined]
 
 
 async def first_to_complete(coros: abc.Iterable[abc.Coroutine[Any, Any, _T]]) -> _T:
@@ -252,32 +241,6 @@ def json_load(path: Path, defaults: _JSON_T, *, merge: bool = True) -> _JSON_T:
 def json_save(path: Path, contents: Mapping[Any, Any], *, sort: bool = False) -> None:
     with open(path, 'w', encoding="utf8") as file:
         json.dump(contents, file, default=_serialize, sort_keys=sort, indent=4)
-
-
-def webopen(url: URL | str):
-    url_str = str(url)
-    if IS_PACKAGED and sys.platform == "linux":
-        # https://pyinstaller.org/en/stable/
-        # runtime-information.html#ld-library-path-libpath-considerations
-        # NOTE: All 4 cases need to be handled here: either of the two values can be there or not.
-        ld_env = "LD_LIBRARY_PATH"
-        ld_path_curr = os.environ.get(ld_env)
-        ld_path_orig = os.environ.get(f"{ld_env}_ORIG")
-        if ld_path_orig is not None:
-            os.environ[ld_env] = ld_path_orig
-        elif ld_path_curr is not None:
-            # pop current
-            os.environ.pop(ld_env)
-
-        webbrowser.open_new_tab(url_str)
-
-        if ld_path_curr is not None:
-            os.environ[ld_env] = ld_path_curr
-        elif ld_path_orig is not None:
-            # pop original
-            os.environ.pop(ld_env)
-    else:
-        webbrowser.open_new_tab(url_str)
 
 
 class ExponentialBackoff:
