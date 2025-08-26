@@ -1,92 +1,121 @@
 from __future__ import annotations
-
-from typing import Any, TypedDict, TYPE_CHECKING
-
+from typing import TYPE_CHECKING
 from yarl import URL
 
+from constants import SETTINGS_PATH, PriorityMode
 from utils import json_load, json_save
-from constants import SETTINGS_PATH, DEFAULT_LANG, PriorityMode
 
 if TYPE_CHECKING:
-    from main import ParsedArgs
+    from main import ParsedArgs # Assuming ParsedArgs is in main.py
 
-
-class SettingsFile(TypedDict):
-    proxy: URL
-    language: str
-    exclude: set[str]
-    priority: list[str]
-    autostart_tray: bool
-    connection_quality: int
-    tray_notifications: bool
-    priority_mode: PriorityMode
-
-
-default_settings: SettingsFile = {
-    "proxy": URL(),
+# This is the default structure for the settings file.
+DEFAULT_SETTINGS = {
     "priority": [],
     "exclude": set(),
-    "autostart_tray": False,
-    "connection_quality": 1,
-    "language": DEFAULT_LANG,
-    "tray_notifications": True,
     "priority_mode": PriorityMode.PRIORITY_ONLY,
+    "autostart_tray": False,
+    "tray_notifications": True,
+    "connection_quality": 1,
+    "proxy": URL(),
+    "language": "English",
 }
 
-
 class Settings:
-    # from args
-    log: bool
-    tray: bool
-    dump: bool
-    # args properties
-    debug_ws: int
-    debug_gql: int
-    logging_level: int
-    # from settings file
-    proxy: URL
-    language: str
-    exclude: set[str]
-    priority: list[str]
-    autostart_tray: bool
-    connection_quality: int
-    tray_notifications: bool
-    priority_mode: PriorityMode
+    def __init__(self, args: "ParsedArgs"):
+        self._args = args
+        self._dirty = False
+        self._data = json_load(SETTINGS_PATH, DEFAULT_SETTINGS)
 
-    PASSTHROUGH = ("_settings", "_args", "_altered")
+    def _get(self, key: str, default: any = None) -> any:
+        return self._data.get(key, default)
 
-    def __init__(self, args: ParsedArgs):
-        self._settings: SettingsFile = json_load(SETTINGS_PATH, default_settings)
-        self._args: ParsedArgs = args
-        self._altered: bool = False
+    def _set(self, key: str, value: any) -> None:
+        if self._data.get(key) != value:
+            self._data[key] = value
+            self._dirty = True
 
-    # default logic of reading settings is to check args first, then the settings file
-    def __getattr__(self, name: str, /) -> Any:
-        if name in self.PASSTHROUGH:
-            # passthrough
-            return getattr(super(), name)
-        elif hasattr(self._args, name):
-            return getattr(self._args, name)
-        elif name in self._settings:
-            return self._settings[name]  # type: ignore[literal-required]
-        return getattr(super(), name)
+    @property
+    def priority(self) -> list[str]:
+        return self._get("priority", [])
 
-    def __setattr__(self, name: str, value: Any, /) -> None:
-        if name in self.PASSTHROUGH:
-            # passthrough
-            return super().__setattr__(name, value)
-        elif name in self._settings:
-            self._settings[name] = value  # type: ignore[literal-required]
-            self._altered = True
-            return
-        raise TypeError(f"{name} is missing a custom setter")
+    @property
+    def exclude(self) -> set[str]:
+        return self._get("exclude", set())
 
-    def __delattr__(self, name: str, /) -> None:
-        raise RuntimeError("settings can't be deleted")
+    @property
+    def priority_mode(self) -> PriorityMode:
+        return self._get("priority_mode", PriorityMode.PRIORITY_ONLY)
+    
+    @priority_mode.setter
+    def priority_mode(self, value: PriorityMode) -> None:
+        self._set("priority_mode", value)
 
-    def alter(self) -> None:
-        self._altered = True
+    @property
+    def autostart_tray(self) -> bool:
+        return self._get("autostart_tray", False)
+
+    @autostart_tray.setter
+    def autostart_tray(self, value: bool) -> None:
+        self._set("autostart_tray", value)
+
+    @property
+    def tray_notifications(self) -> bool:
+        return self._get("tray_notifications", True)
+
+    @tray_notifications.setter
+    def tray_notifications(self, value: bool) -> None:
+        self._set("tray_notifications", value)
+
+    @property
+    def connection_quality(self) -> int:
+        return self._get("connection_quality", 1)
+
+    @connection_quality.setter
+    def connection_quality(self, value: int) -> None:
+        self._set("connection_quality", value)
+
+    @property
+    def proxy(self) -> URL:
+        return self._get("proxy", URL())
+
+    @proxy.setter
+    def proxy(self, value: URL) -> None:
+        self._set("proxy", value)
+
+    @property
+    def language(self) -> str:
+        return self._get("language", "English")
+
+    @language.setter
+    def language(self, value: str) -> None:
+        self._set("language", value)
+
+    # These properties are derived from command-line arguments
+    @property
+    def logging_level(self) -> int:
+        return self._args.logging_level
+
+    @property
+    def log(self) -> bool:
+        return self._args.log
+
+    @property
+    def tray(self) -> bool:
+        return self._args.tray
+
+    @property
+    def dump(self) -> bool:
+        return self._args.dump
+
+    @property
+    def debug_ws(self) -> int:
+        return self._args.debug_ws
+
+    @property
+    def debug_gql(self) -> int:
+        return self._args.debug_gql
 
     def save(self, *, force: bool = False) -> None:
-        if self._altered or force:
-            json_save(SETTINGS_PATH, self._settings, sort=True)
+        if self._dirty or force:
+            json_save(SETTINGS_PATH, self._data, sort=True)
+            self._dirty = False

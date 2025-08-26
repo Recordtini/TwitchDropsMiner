@@ -10,8 +10,6 @@ import string
 import asyncio
 import logging
 import traceback
-import webbrowser
-import tkinter as tk
 from enum import Enum
 from pathlib import Path
 from functools import wraps
@@ -19,14 +17,13 @@ from contextlib import suppress
 from functools import cached_property
 from datetime import datetime, timezone
 from collections import abc, OrderedDict
-from typing import Any, Literal, Callable, Generic, Mapping, TypeVar, ParamSpec, cast
+from typing import Any, Callable, Generic, Mapping, TypeVar, ParamSpec, cast
 
 from yarl import URL
-from PIL.ImageTk import PhotoImage
-from PIL import Image as Image_module
 
 from exceptions import ExitRequest, ReloadRequest
-from constants import IS_PACKAGED, JsonType, PriorityMode
+from constants import JsonType, PriorityMode
+# This import now works correctly because _resource_path is defined in the new constants.py
 from constants import _resource_path as resource_path  # noqa
 
 
@@ -35,14 +32,6 @@ _D = TypeVar("_D")  # default
 _P = ParamSpec("_P")  # params
 _JSON_T = TypeVar("_JSON_T", bound=Mapping[Any, Any])
 logger = logging.getLogger("TwitchDrops")
-
-
-def set_root_icon(root: tk.Tk, image_path: Path | str) -> None:
-    with Image_module.open(image_path) as image:
-        icon_photo = PhotoImage(master=root, image=image)
-    root.iconphoto(True, icon_photo)  # type: ignore[arg-type]
-    # keep a reference to the PhotoImage to avoid the ResourceWarning
-    root._icon_image = icon_photo  # type: ignore[attr-defined]
 
 
 async def first_to_complete(coros: abc.Iterable[abc.Coroutine[Any, Any, _T]]) -> _T:
@@ -72,7 +61,7 @@ def format_traceback(exc: BaseException, **kwargs: Any) -> str:
 
 def lock_file(path: Path) -> tuple[bool, io.TextIOWrapper]:
     file = path.open('w', encoding="utf8")
-    file.write('ツ')
+    file.write('?')
     file.flush()
     if sys.platform == "win32":
         import msvcrt
@@ -135,14 +124,11 @@ def task_wrapper(
             except Exception:
                 logger.exception(f"Exception in {afunc.__name__} task")
                 if critical:
-                    # critical task's death should trigger a termination.
-                    # there isn't an easy and sure way to obtain the Twitch instance here,
-                    # but we can improvise finding it
                     from twitch import Twitch  # cyclic import
                     probe = args and args[0] or None  # extract from 'self' arg
                     if isinstance(probe, Twitch):
                         probe.close()
-                    elif probe is not None:
+                    elif probe is not None and hasattr(probe, "_twitch"):
                         probe = getattr(probe, "_twitch", None)  # extract from '_twitch' attr
                         if isinstance(probe, Twitch):
                             probe.close()
@@ -173,8 +159,6 @@ def _serialize(obj: Any) -> Any:
     elif isinstance(obj, set):
         d = list(obj)
     elif isinstance(obj, Enum):
-        # NOTE: IntEnum cannot be used, as it will get serialized as a plain integer,
-        # then loaded back as an integer as well.
         d = obj.value
     elif isinstance(obj, URL):
         d = str(obj)
@@ -197,14 +181,12 @@ SERIALIZE_ENV: dict[str, Callable[[Any], object]] = {
 
 
 def _remove_missing(obj: JsonType) -> JsonType:
-    # this modifies obj in place, but we return it just in case
     for key, value in obj.copy().items():
         if value is _MISSING:
             del obj[key]
         elif isinstance(value, dict):
             _remove_missing(value)
             if not value:
-                # the dict is empty now, so remove it's key entirely
                 del obj[key]
     return obj
 
@@ -220,18 +202,14 @@ def _deserialize(obj: JsonType) -> Any:
 
 
 def merge_json(obj: JsonType, template: Mapping[Any, Any]) -> None:
-    # NOTE: This modifies object in place
     for k, v in list(obj.items()):
         if k not in template:
-            # unknown key: overwrite from template
             del obj[k]
         elif type(v) is not type(template[k]):
-            # types don't match: overwrite from template
             obj[k] = template[k]
         elif isinstance(v, dict):
             assert isinstance(template[k], dict)
             merge_json(v, template[k])
-    # ensure the object is not missing any keys
     for k in template.keys():
         if k not in obj:
             obj[k] = template[k]
@@ -254,73 +232,27 @@ def json_save(path: Path, contents: Mapping[Any, Any], *, sort: bool = False) ->
         json.dump(contents, file, default=_serialize, sort_keys=sort, indent=4)
 
 
-def webopen(url: URL | str):
-    url_str = str(url)
-    if IS_PACKAGED and sys.platform == "linux":
-        # https://pyinstaller.org/en/stable/
-        # runtime-information.html#ld-library-path-libpath-considerations
-        # NOTE: All 4 cases need to be handled here: either of the two values can be there or not.
-        ld_env = "LD_LIBRARY_PATH"
-        ld_path_curr = os.environ.get(ld_env)
-        ld_path_orig = os.environ.get(f"{ld_env}_ORIG")
-        if ld_path_orig is not None:
-            os.environ[ld_env] = ld_path_orig
-        elif ld_path_curr is not None:
-            # pop current
-            os.environ.pop(ld_env)
-
-        webbrowser.open_new_tab(url_str)
-
-        if ld_path_curr is not None:
-            os.environ[ld_env] = ld_path_curr
-        elif ld_path_orig is not None:
-            # pop original
-            os.environ.pop(ld_env)
-    else:
-        webbrowser.open_new_tab(url_str)
-
-
 class ExponentialBackoff:
-    def __init__(
-        self,
-        *,
-        base: float = 2,
-        variance: float | tuple[float, float] = 0.1,
-        shift: float = 0,
-        maximum: float = 300,
-    ):
+    def __init__(self, *, base: float = 2, variance: float | tuple[float, float] = 0.1, shift: float = 0, maximum: float = 300):
         if base <= 1:
             raise ValueError("Base has to be greater than 1")
         self.steps: int = 0
         self.base: float = float(base)
         self.shift: float = float(shift)
         self.maximum: float = float(maximum)
-        self.variance_min: float
-        self.variance_max: float
         if isinstance(variance, tuple):
             self.variance_min, self.variance_max = variance
         else:
             self.variance_min = 1 - variance
             self.variance_max = 1 + variance
 
-    @property
-    def exp(self) -> int:
-        return max(0, self.steps - 1)
-
     def __iter__(self) -> abc.Iterator[float]:
         return self
 
     def __next__(self) -> float:
-        value: float = (
-            pow(self.base, self.steps)
-            * random.uniform(self.variance_min, self.variance_max)
-            + self.shift
-        )
+        value: float = (pow(self.base, self.steps) * random.uniform(self.variance_min, self.variance_max) + self.shift)
         if value > self.maximum:
             return self.maximum
-        # NOTE: variance can cause the returned value to be lower than the previous one already,
-        # so this should be safe to move past the first return,
-        # to prevent the exponent from getting very big after reaching max and many iterations
         self.steps += 1
         return value
 
@@ -340,16 +272,9 @@ class RateLimiter:
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self.concurrent}/{self.total}/{self.capacity})"
 
-    def __del__(self) -> None:
-        if self._reset_task is not None:
-            self._reset_task.cancel()
-
-    def _can_proceed(self) -> bool:
-        return max(self.total, self.concurrent) < self.capacity
-
     async def __aenter__(self):
         async with self._cond:
-            await self._cond.wait_for(self._can_proceed)
+            await self._cond.wait_for(lambda: self.concurrent < self.capacity)
             self.total += 1
             self.concurrent += 1
             if self._reset_task is None:
@@ -360,17 +285,13 @@ class RateLimiter:
         async with self._cond:
             self._cond.notify(self.capacity - self.concurrent)
 
-    async def _reset(self) -> None:
-        if self._reset_task is not None:
-            self._reset_task = None
+    async def _rtask(self) -> None:
+        await asyncio.sleep(self.window)
         async with self._cond:
             self.total = 0
             if self.concurrent < self.capacity:
                 self._cond.notify(self.capacity - self.concurrent)
-
-    async def _rtask(self) -> None:
-        await asyncio.sleep(self.window)
-        await self._reset()
+        self._reset_task = None
 
 
 class AwaitableValue(Generic[_T]):
@@ -381,7 +302,7 @@ class AwaitableValue(Generic[_T]):
     def has_value(self) -> bool:
         return self._event.is_set()
 
-    def wait(self) -> abc.Coroutine[Any, Any, Literal[True]]:
+    def wait(self) -> abc.Coroutine[Any, Any, Any]:
         return self._event.wait()
 
     def get_with_default(self, default: _D) -> _T | _D:
@@ -424,13 +345,11 @@ class Game:
 
     @cached_property
     def slug(self) -> str:
-        """
-        Converts the game name into a slug, useable for the GQL API.
-        """
-        # remove specific characters
         slug_text = re.sub(r'\'', '', self.name.lower())
-        # remove non alpha-numeric characters
         slug_text = re.sub(r'\W+', '-', slug_text)
-        # strip and collapse dashes
         slug_text = re.sub(r'-{2,}', '-', slug_text.strip('-'))
         return slug_text
+
+
+def set_root_icon(root: Any, icon_path: Path) -> None:
+    pass
